@@ -1,7 +1,6 @@
-
 # 🤖 BrowserRL — Mini RL Environment for Browser Automation
 
-> **Meta PyTorch OpenEnv Hackathon 2026** | Built with OpenEnv + BrowserGym + Qwen2.5
+> **Meta PyTorch OpenEnv Hackathon 2026** | Built with OpenEnv + BrowserGym + Vision AI
 
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-Compatible-green.svg)](https://github.com/openenv)
@@ -14,36 +13,42 @@
 BrowserRL is a **Mini Reinforcement Learning Environment** where an AI agent learns to complete real browser tasks through trial and error — getting smarter with every episode.
 
 The agent:
-- 👁️ **Sees** the browser (screenshot + page HTML)
-- 🤔 **Decides** what action to take (powered by Groq/Gemini/Ollama)
+- 👁️ **Sees** the browser (actual screenshot via Vision AI)
+- 🤔 **Decides** what action to take (Groq Vision → Gemini Vision → Ollama)
 - 🖱️ **Executes** the action (click, type, scroll, navigate)
 - 💰 **Gets rewarded** based on task completion
-- 🔁 **Repeats** until the task is done!
+- 💾 **Remembers** past successful episodes (SQLite few-shot learning)
+- 🔁 **Gets smarter** with every episode!
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   BrowserRL System                   │
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│   Chat UI (Gradio)                                   │
-│       ↓                                              │
-│   Task Parser → Task Config                          │
-│       ↓                                              │
-│   OpenEnv RL Environment (BrowserRLEnv)              │
-│       ↓                                              │
-│   BrowserGym + Playwright → Real Chromium Browser    │
-│       ↓                                              │
-│   AI Agent Brain (Groq → Gemini → Ollama fallback)   │
-│       ↓                                              │
-│   SQLite Memory (Replay Buffer)                      │
-│       ↓                                              │
-│   Training Dashboard (Matplotlib + Gradio)           │
-│                                                      │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   BrowserRL System v2.0                  │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│   Chat UI (Gradio)                                       │
+│       ↓                                                  │
+│   Smart Task Parser (detects website + final goal)       │
+│       ↓                                                  │
+│   OpenEnv RL Environment (BrowserRLEnv)                  │
+│       ↓                                                  │
+│   BrowserGym + Playwright → Real Chromium Browser        │
+│       ↓                                                  │
+│   Vision AI Agent Brain:                                 │
+│     ⚡ Groq Vision (llama-4-scout) — fastest             │
+│     🌟 Gemini Vision — fallback                          │
+│     🦙 Ollama (qwen2.5) — offline fallback               │
+│       ↓                                                  │
+│   Few-Shot Learning (reads past episodes from SQLite)    │
+│       ↓                                                  │
+│   SQLite Replay Buffer (stores all episodes + steps)     │
+│       ↓                                                  │
+│   Training Dashboard (Matplotlib + Gradio)               │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -56,8 +61,29 @@ The agent:
 | **Observation Space** | Screenshot (1280×720) + URL + Page Title + DOM Text |
 | **Action Space** | Click, Type, Scroll, Navigate, Submit, Back, Wait |
 | **Reward Function** | +0.3 click, +0.3 type, +0.5 submit, +10.0 task complete |
-| **Memory** | SQLite Replay Buffer storing all episodes and steps |
-| **Agent Brain** | Groq (fast) → Gemini (fallback) → Ollama (offline) |
+| **Memory** | SQLite Replay Buffer — stores every episode and step |
+| **Learning** | Few-shot learning from past successful episodes |
+| **Agent Brain** | Groq Vision → Gemini Vision → Ollama fallback |
+| **Sessions** | Persistent browser sessions — agent stays logged in |
+
+---
+
+## 🆕 New Features in v2.0
+
+### 👁️ Vision Support
+Agent now sends actual screenshots to AI — can SEE buttons, tabs, and links instead of guessing from text!
+
+### 🧠 Few-Shot Learning
+Agent reads past successful episodes from SQLite database and uses them as examples — gets smarter with every task!
+
+### 🔑 Persistent Sessions
+Save your login once — agent reuses it forever. No more wasting steps on login!
+
+### 🎯 Smart Task Parser
+Detects specific websites and final goals automatically:
+- Detects 20+ known websites (GitHub, PyPI, npm, Reddit etc.)
+- Finds final goal from instruction (Issues tab, Release history etc.)
+- Never dumps full instruction into search bar
 
 ---
 
@@ -71,7 +97,7 @@ After 20 training episodes:
 | Avg Reward | 6.02 |
 | Avg Steps | 9.6 |
 | Best Reward | 11.80 |
-| Tasks Covered | Google, YouTube, Wikipedia |
+| Tasks Covered | Google, YouTube, Wikipedia, GitHub, PyPI |
 
 ---
 
@@ -89,13 +115,13 @@ pip install -r requirements.txt
 playwright install chromium
 sudo playwright install-deps
 
-# Install Ollama (free local AI)
+# Install Ollama (free local AI — no API key needed!)
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:0.5b
 
-# Set API keys (optional but faster)
+# Set API keys for faster performance (optional)
 cp .env.example .env
-# Edit .env with your Groq and Gemini keys
+# Edit .env with your Groq and Gemini API keys
 ```
 
 ---
@@ -103,17 +129,20 @@ cp .env.example .env
 ## ▶️ Running
 
 ```bash
-# Run the demo
-python demo.py
+# Start Ollama (local AI brain)
+ollama serve &
 
 # Launch Chat UI
 python ui/chat_ui.py
 
-# Run training
+# Run training loop
 python train.py
 
 # View training dashboard
 python dashboard.py
+
+# Run demo script
+python demo.py
 ```
 
 ---
@@ -121,11 +150,19 @@ python dashboard.py
 ## 🎮 Example Tasks
 
 ```
+Simple navigation:
+"Go to github.com"
+"Navigate to huggingface.co"
+
+Search tasks:
 "Search for PyTorch tutorials on Google"
-"Search for machine learning on YouTube"  
-"Navigate to github.com"
+"Search for machine learning on YouTube"
 "Search for reinforcement learning on Wikipedia"
-"Go to huggingface.co"
+
+Multi-step tasks:
+"Go to github.com/search and search for browser-use"
+"Go to pypi.org and search for playwright"
+"Go to npmjs.com and search for axios"
 ```
 
 ---
@@ -145,14 +182,36 @@ python dashboard.py
 
 ---
 
-## 🤖 AI Brain Fallback System
+## 🤖 AI Brain System
 
 ```
-Try Groq (⚡ fastest, free 30 req/min)
+Step 1: Groq Vision ⚡👁️ (llama-4-scout — sees screenshot, fastest)
     ↓ if rate limited
-Try Gemini (🌟 fast, free 15 req/min)  
+Step 2: Gemini Vision 🌟👁️ (sees screenshot, fast)
+    ↓ if rate limited  
+Step 3: Groq Text ⚡ (text only, fast)
     ↓ if rate limited
-Fall back to Ollama (🦙 unlimited, local, free forever)
+Step 4: Gemini Text 🌟 (text only)
+    ↓ if all APIs fail
+Step 5: Ollama 🦙 (local, unlimited, always works!)
+```
+
+---
+
+## 🧠 How Few-Shot Learning Works
+
+```
+Episode 1: Search PyTorch on Google
+→ Agent tries → succeeds → saved to SQLite ✅
+
+Episode 5: Search machine learning on Google
+→ Agent reads Episode 1 from DB as example
+→ Already knows: click textarea[name='q'] → type → submit
+→ Completes faster! ✅
+
+Episode 20: Any search task
+→ Agent has 19 examples to learn from
+→ Almost always succeeds! 🎉
 ```
 
 ---
@@ -162,19 +221,20 @@ Fall back to Ollama (🦙 unlimited, local, free forever)
 ```
 Browser_Assistant/
 ├── env/
-│   └── browser_env.py      # Core OpenEnv RL Environment
+│   └── browser_env.py       # Core OpenEnv RL Environment + Session support
 ├── agent/
-│   └── agent.py            # AI brain with smart fallback
+│   └── agent.py             # Vision AI brain + Few-shot learning
 ├── tasks/
-│   └── task_config.py      # Task definitions and URL builder
+│   └── task_config.py       # Smart task parser + URL builder
 ├── memory/
-│   └── replay_buffer.py    # SQLite training memory
+│   └── replay_buffer.py     # SQLite training memory
 ├── ui/
-│   └── chat_ui.py          # Gradio Chat UI
-├── train.py                # Training loop
-├── dashboard.py            # Training metrics dashboard
-├── demo.py                 # Demo script
-└── requirements.txt        # Dependencies
+│   └── chat_ui.py           # Gradio Chat UI
+├── train.py                 # Training loop
+├── dashboard.py             # Training metrics dashboard
+├── demo.py                  # Demo script
+├── .env.example             # API keys template
+└── requirements.txt         # Dependencies
 ```
 
 ---
@@ -187,5 +247,5 @@ Built for the **Meta PyTorch OpenEnv Hackathon x Scaler School of Technology 202
 
 ## 🔗 Links
 
-- [Hugging Face Demo](#) ← Add your HF Spaces link here
 - [GitHub Repository](https://github.com/Yashvardhan2007/Browser_Assistant)
+- [Hugging Face Demo](#) ← Coming soon!
