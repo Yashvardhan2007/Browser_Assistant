@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .gradio/
 browsergym.db
+browser_session/

@@ -3,20 +3,27 @@ from gymnasium import spaces
 import numpy as np
 from typing import Optional
 import time
+import os
 
 # ============================================================
 # PASTE THIS IN: env/browser_env.py
+# Supports persistent browser sessions — agent stays logged in!
 # ============================================================
+
+SESSION_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "browser_session")
+
 
 class BrowserRLEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
     ACTION_TYPES = ["click", "type", "scroll", "navigate", "submit", "back", "wait"]
 
-    def __init__(self, task_config: dict, render_mode: Optional[str] = None):
+    def __init__(self, task_config: dict, render_mode: Optional[str] = None, use_session: bool = True):
         super().__init__()
         self.task_config = task_config
         self.render_mode = render_mode
+        self.use_session = use_session and os.path.exists(SESSION_DIR)
         self.browser = None
+        self.context = None
         self.page = None
         self.step_count = 0
         self.max_steps = 20
@@ -47,7 +54,11 @@ class BrowserRLEnv(gym.Env):
         self.page.goto(start_url)
         time.sleep(2)
         observation = self._get_observation()
-        info = {"task": self.task_config.get("instructions", ""), "url": start_url}
+        info = {
+            "task": self.task_config.get("instructions", ""),
+            "url": start_url,
+            "session_active": self.use_session,
+        }
         return observation, info
 
     def step(self, action: dict):
@@ -61,6 +72,7 @@ class BrowserRLEnv(gym.Env):
             action_type = self.ACTION_TYPES[action["action_type"]]
             selector = action.get("selector", "")
             value = action.get("value", "")
+            reasoning = action.get("reasoning", "").lower()
 
             if action_type == "click":
                 reward += self._action_click(selector)
@@ -79,15 +91,24 @@ class BrowserRLEnv(gym.Env):
             elif action_type == "wait":
                 time.sleep(1)
                 reward += 0.0
-                # If agent says wait, check if task is already done
-                # Also if reasoning says complete, stop immediately
-                reasoning = action.get("reasoning", "").lower()
-                if any(word in reasoning for word in ["complete", "done", "finished", "stop", "task is complete"]):
-                    terminated = True
-                    self.task_completed = True
-                    info["success"] = True
-                    info["message"] = "✅ Task completed!"
+                if any(w in reasoning for w in ["complete", "done", "finished", "stopping", "task is complete"]):
+                    task_done, _ = self._check_task_completion()
+                    if task_done:
+                        reward += 10.0
+                        terminated = True
+                        self.task_completed = True
+                        info["success"] = True
+                        info["message"] = "✅ Task completed!"
+                observation = self._get_observation()
+                info["step"] = self.step_count
+                info["task_completed"] = self.task_completed
+                info["current_url"] = self.page.url if self.page else ""
+                if self.step_count >= self.max_steps and not self.task_completed:
+                    info["message"] = "❌ Max steps reached"
+                    return observation, reward - 1.0, False, True, info
+                return observation, reward, terminated, truncated, info
 
+            # Check completion after real actions
             task_done, completion_reward = self._check_task_completion()
             if task_done:
                 reward += completion_reward
@@ -110,13 +131,15 @@ class BrowserRLEnv(gym.Env):
         info["step"] = self.step_count
         info["task_completed"] = self.task_completed
         info["current_url"] = self.page.url if self.page else ""
-
         return observation, reward, terminated, truncated, info
 
     def _action_click(self, selector):
         try:
             if selector:
-                self.page.click(selector, timeout=5000)
+                try:
+                    self.page.click(selector, timeout=3000)
+                except:
+                    self.page.click(f"text={selector}", timeout=3000)
             time.sleep(1)
             return 0.3
         except:
@@ -124,7 +147,7 @@ class BrowserRLEnv(gym.Env):
 
     def _action_type(self, selector, text):
         try:
-            if selector:
+            if selector and text:
                 self.page.fill(selector, text)
             time.sleep(0.5)
             return 0.3
@@ -144,9 +167,11 @@ class BrowserRLEnv(gym.Env):
 
     def _action_navigate(self, url):
         try:
+            if not url:
+                return -0.2
             if not url.startswith("http"):
                 url = "https://" + url
-            self.page.goto(url, timeout=10000)
+            self.page.goto(url, timeout=15000)
             time.sleep(2)
             return 0.2
         except:
@@ -155,7 +180,10 @@ class BrowserRLEnv(gym.Env):
     def _action_submit(self, selector):
         try:
             if selector:
-                self.page.click(selector)
+                try:
+                    self.page.click(selector, timeout=3000)
+                except:
+                    self.page.keyboard.press("Enter")
             else:
                 self.page.keyboard.press("Enter")
             time.sleep(2)
@@ -169,10 +197,8 @@ class BrowserRLEnv(gym.Env):
             current_url = self.page.url
             url_check = success_condition.get("url_contains", "")
             text_check = success_condition.get("page_contains", "")
-
             if url_check and url_check in current_url:
                 return True, 10.0
-
             if text_check:
                 content = self.page.content()
                 if text_check.lower() in content.lower():
@@ -226,12 +252,27 @@ class BrowserRLEnv(gym.Env):
             from playwright.sync_api import sync_playwright
             if self._playwright_instance is None:
                 self._playwright_instance = sync_playwright().start()
-            self.browser = self._playwright_instance.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"]
-            )
-            self.page = self.browser.new_page()
-            self.page.set_viewport_size({"width": 1280, "height": 720})
+
+            if self.use_session:
+                # ✅ Use persistent session — agent stays logged in!
+                print(f"🔑 Using saved session from {SESSION_DIR}")
+                self.context = self._playwright_instance.chromium.launch_persistent_context(
+                    user_data_dir=SESSION_DIR,
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    viewport={"width": 1280, "height": 720},
+                )
+                self.page = self.context.new_page()
+            else:
+                # Normal browser — no session
+                self.browser = self._playwright_instance.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"]
+                )
+                self.context = self.browser.new_context()
+                self.page = self.context.new_page()
+                self.page.set_viewport_size({"width": 1280, "height": 720})
+
         except Exception as e:
             raise RuntimeError(f"Failed to launch browser: {e}")
 
@@ -241,6 +282,8 @@ class BrowserRLEnv(gym.Env):
 
     def close(self):
         try:
+            if self.context:
+                self.context.close()
             if self.browser:
                 self.browser.close()
             if self._playwright_instance:
@@ -250,17 +293,18 @@ class BrowserRLEnv(gym.Env):
             pass
 
 
-def make_env(task_config: dict) -> BrowserRLEnv:
-    return BrowserRLEnv(task_config=task_config)
+def make_env(task_config: dict, use_session: bool = True) -> BrowserRLEnv:
+    return BrowserRLEnv(task_config=task_config, use_session=use_session)
 
 
 def get_env_info() -> dict:
     return {
         "name": "BrowserRL-v1",
-        "description": "Mini RL Environment for Browser Automation",
-        "version": "1.0.0",
-        "task_types": ["form_fill", "search", "navigate"],
+        "description": "Mini RL Environment for Browser Automation with Persistent Sessions",
+        "version": "2.0.0",
+        "task_types": ["form_fill", "search", "navigate", "multi_step"],
         "action_types": BrowserRLEnv.ACTION_TYPES,
         "max_steps": 20,
         "reward_range": (-10, 10),
+        "features": ["persistent_session", "vision", "few_shot_learning"],
     }
