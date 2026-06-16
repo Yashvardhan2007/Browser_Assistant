@@ -1,6 +1,6 @@
 # 🤖 BrowserRL — Mini RL Environment for Browser Automation
 
-> **Meta PyTorch OpenEnv Hackathon 2026** | Built with OpenEnv + BrowserGym + Vision AI
+
 
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-Compatible-green.svg)](https://github.com/openenv)
@@ -239,9 +239,6 @@ Browser_Assistant/
 
 ---
 
-## 👥 Team
-
-Built for the **Meta PyTorch OpenEnv Hackathon x Scaler School of Technology 2026**
 
 ---
 
