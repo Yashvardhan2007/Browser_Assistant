@@ -2,6 +2,8 @@ import gradio as gr
 import sys, os, time
 from PIL import Image
 import numpy as np
+import queue
+import threading
 
 # ============================================================
 # PASTE THIS IN: ui/chat_ui.py
@@ -95,6 +97,25 @@ def run_browser_task(message, history):
 
             action = agent.decide_action(observation)
             action_name = action.get("action_type_name", "unknown")
+            if action_name.lower() in ["stop", "complete", "done", "answer", "extract"]:
+                # 💰 THE AGENT SUCCESSFULLY COMPLETED THE TASK! Give it the massive reward!
+                total_reward += 10.0 
+                
+                final = build_response(message, steps_log, total_reward, True, observation)
+                
+                if action_name.lower() in ["answer", "extract"]:
+                    answer_text = action.get("value", "No answer provided")
+                    history[-1]["content"] = final + f"\n\n💡 **AGENT FOUND THE ANSWER:** {answer_text}"
+                    yield history, current_screenshot, f"💡 Answer: {answer_text}", gr.update(value="▶ Run", variant="primary", interactive=True)
+                else:
+                    history[-1]["content"] = final + "\n\n🎉 **Agent voluntarily stopped because the task is complete!**"
+                    yield history, current_screenshot, "🎉 Task completed successfully!", gr.update(value="▶ Run", variant="primary", interactive=True)
+                
+                # Save the massive success to the Replay Buffer!
+                _save_to_memory(message, task_config, steps_log, total_reward, True, observation)
+                
+                is_running = False
+                return
             reasoning = action.get("reasoning", "")
             selector = action.get("selector", "")
             value = action.get("value", "")
@@ -206,12 +227,25 @@ def build_response(task, steps_log, total_reward, success, observation, stopped=
 
 def clear_chat():
     global current_env, current_screenshot, is_running
-    if current_env:
-        current_env.close()
-        current_env = None
+    
+    # Safely close Playwright in a background thread so Gradio doesn't panic
+    def close_worker():
+        global current_env
+        if current_env:
+            try:
+                current_env.close()
+            except:
+                pass
+            current_env = None
+
+    t = threading.Thread(target=close_worker)
+    t.start()
+    t.join() # Wait for it to close safely
+
     current_screenshot = None
     is_running = False
     agent._stop_requested = False
+    
     return [], None, "Chat cleared!", gr.update(value="▶ Run", variant="primary", interactive=True)
 
 

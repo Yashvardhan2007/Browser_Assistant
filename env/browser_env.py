@@ -192,19 +192,8 @@ class BrowserRLEnv(gym.Env):
             return -0.2
 
     def _check_task_completion(self):
-        success_condition = self.task_config.get("success_condition", {})
-        try:
-            current_url = self.page.url
-            url_check = success_condition.get("url_contains", "")
-            text_check = success_condition.get("page_contains", "")
-            if url_check and url_check in current_url:
-                return True, 10.0
-            if text_check:
-                content = self.page.content()
-                if text_check.lower() in content.lower():
-                    return True, 10.0
-        except:
-            pass
+        # Disabled! The environment no longer gives participation trophies.
+        # The agent must explicitly output "stop" or "answer" to finish.
         return False, 0.0
 
     def _get_observation(self):

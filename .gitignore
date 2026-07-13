@@ -4,3 +4,9 @@ __pycache__/
 .gradio/
 browsergym.db
 browser_session/
+__pycache__/
+*.pyc
+*.db
+__pycache__/
+*.pyc
+*.db

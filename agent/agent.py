@@ -18,7 +18,20 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "browsergym.db")
 
 TEXT_PROMPT = """You are a precise browser automation agent. Complete this task: {task}
-
+             Task Complete      → If the goal is fully achieved, output: action_type_name: "stop"
+             
+═══════════════════════════════════════════
+ALLOWED ACTIONS
+═══════════════════════════════════════════
+...
+Extract Data  → {{"action_type_name": "answer", "value": "THE EXACT TEXT YOU FOUND"}}
+═══════════════════════════════════════════
+ALLOWED ACTIONS
+═══════════════════════════════════════════
+    Click a button     → {{"action_type_name": "click", "selector": "button_id"}}
+    Type text          → {{"action_type_name": "type", "selector": "input_id", "value": "text"}}
+    Stop/Done          → {{"action_type_name": "stop"}}
+    Extract Data       → {{"action_type_name": "answer", "value": "THE EXACT TEXT YOU FOUND"}}
 ═══════════════════════════════════════════
 LESSONS FROM PAST EXPERIENCE
 ═══════════════════════════════════════════
@@ -110,7 +123,9 @@ class BrowserAgent:
         self._stop_requested = False
         self.groq_failed = False
         self.gemini_failed = False
-        self.current_screenshot_b64 = None  # Store latest screenshot
+        self.current_screenshot_b64 = None
+        self.consecutive_waits = 0
+        self.last_action_signature = None  # Store latest screenshot
 
     def set_task(self, task: str):
         self.task = task
@@ -250,6 +265,35 @@ class BrowserAgent:
             }
 
         action = self._parse_action(action_text)
+        action_name = action.get("action_type_name", "unknown").lower()
+        selector = action.get("selector", "")
+        current_signature = f"{action_name}_{selector}"
+        
+        # Check if the agent is outputting "wait" or repeating the exact same selector action
+        if action_name == "wait" or current_signature == self.last_action_signature:
+            self.consecutive_waits += 1
+        else:
+            self.consecutive_waits = 0  # Reset counter if it makes a genuine new move
+            
+        self.last_action_signature = current_signature
+        
+        # If the same brain stalls for 3 consecutive steps, force it out!
+        if self.consecutive_waits >= 3:
+            print(f"⚠️ {self.last_used_brain} got stuck in a loop/wait pattern! Forcing fallback...")
+            self.consecutive_waits = 0  # Reset for the next brain
+            self.last_action_signature = None
+            
+            # Disable the stuck brain so the waterfall skips it next loop
+            if "Groq" in self.last_used_brain:
+                self.groq_failed = True
+            elif "Gemini" in self.last_used_brain:
+                self.gemini_failed = True
+                
+            # Recursively re-run decide_action right now with the same observation data.
+            # Because we flagged the current model as failed, it will drop to the next option!
+            return self.decide_action(observation)
+        # 🚨 --- END OF LOOP BREAKER --- 🚨
+
         self.action_history.append({
             "step": len(self.action_history) + 1,
             "action": action,
@@ -320,7 +364,7 @@ class BrowserAgent:
         except:
             return None
 
-    # ── Gemini Vision ──────────────────────────────────────
+   # ── Gemini Vision ──────────────────────────────────────
     def _ask_gemini_vision(self, observation: dict):
         try:
             prompt = self._build_vision_prompt(observation)
@@ -345,8 +389,13 @@ class BrowserAgent:
             )
             if r.status_code == 200:
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            
+            # 🚨 THIS WILL TELL US IF GOOGLE REJECTS IT
+            print(f"❌ Gemini Vision API Rejected: {r.status_code} - {r.text}")
             return None
-        except:
+        except Exception as e:
+            # 🚨 THIS TELLS US IF PYTHON CRASHES
+            print(f"❌ Gemini Vision Crash: {str(e)}")
             return None
 
     # ── Gemini Text only ───────────────────────────────────
@@ -364,8 +413,11 @@ class BrowserAgent:
             )
             if r.status_code == 200:
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            
+            print(f"❌ Gemini Text API Rejected: {r.status_code} - {r.text}")
             return None
-        except:
+        except Exception as e:
+            print(f"❌ Gemini Text Crash: {str(e)}")
             return None
 
     # ── Ollama text only ───────────────────────────────────
@@ -379,8 +431,11 @@ class BrowserAgent:
             )
             if r.status_code == 200:
                 return r.json().get("response", "")
+                
+            print(f"❌ Ollama API Rejected: {r.status_code} - {r.text}")
             return None
-        except:
+        except Exception as e:
+            print(f"❌ Ollama Crash: {str(e)}")
             return None
 
     # ── Prompt builders ────────────────────────────────────
