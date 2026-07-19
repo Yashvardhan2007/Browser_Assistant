@@ -8,23 +8,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ============================================================
-# PASTE THIS IN: agent/agent.py
-# VISION ENABLED — Agent can actually SEE the browser!
-# ============================================================
+
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "browsergym.db")
 
 TEXT_PROMPT = """You are a precise browser automation agent. Complete this task: {task}
-             Task Complete      → If the goal is fully achieved, output: action_type_name: "stop"
+             Task Complete (Navigation) → If the goal is just to navigate, output: {{"action_type_name": "stop"}}
+             Task Complete (Extraction) → If the goal is to find data, output: {{"action_type_name": "answer", "value": "THE EXACT EXTRACTED TEXT"}}
              
-═══════════════════════════════════════════
-ALLOWED ACTIONS
-═══════════════════════════════════════════
-...
-Extract Data  → {{"action_type_name": "answer", "value": "THE EXACT TEXT YOU FOUND"}}
 ═══════════════════════════════════════════
 ALLOWED ACTIONS
 ═══════════════════════════════════════════
@@ -49,39 +42,21 @@ Previous actions:
 {history}
 
 ═══════════════════════════════════════════
-SELECTORS TO USE
+🛑 CRITICAL TERMINATION RULES 🛑
 ═══════════════════════════════════════════
-Google search      → textarea[name='q']
-Google submit      → input[name='btnK']
-YouTube search     → input[name='search_query']
-Wikipedia search   → #searchInput
-GitHub search      → input[name='q']
-Any link/tab       → a:has-text('LINK TEXT')
-Any button         → button:has-text('BUTTON TEXT')
-Input by label     → input[placeholder='Search...']
-
-═══════════════════════════════════════════
-RULES
-═══════════════════════════════════════════
-1. ALWAYS click input before typing
-2. value = ONLY the search term, never full instruction
-3. For tabs/buttons use: a:has-text('Tab Name')
-4. If selector fails try: text='Button Text'
-5. When done → wait with "Task is complete, stopping."
-
-ACTIONS: 0=click 1=type 2=scroll 3=navigate 4=submit 5=back 6=wait
+1. If your task instruction says "STOP immediately" or "URL contains:", and the current URL matches that target, YOUR TASK IS 100% COMPLETE.
+2. DO NOT attempt to sign in, accept cookies, click pop-ups, or explore the page unless explicitly asked.
+3. The moment the target page loads or the goal is met, you MUST output:
+   {{"action_type": 6, "action_type_name": "stop", "selector": "", "value": "", "scroll_direction": 1, "reasoning": "Target reached."}}
 
 RESPOND WITH ONLY JSON:
-{{"action_type":<0-6>,"action_type_name":"<n>","selector":"<css>","value":"<text>","scroll_direction":1,"reasoning":"<why>"}}"""
+{{"action_type":<0-6>,"action_type_name":"<name>","selector":"<css>","value":"<text>","scroll_direction":1,"reasoning":"<why>"}}"""
 
 VISION_PROMPT = """You are a browser automation agent with VISION. You can see the screenshot of the browser.
+         - If the task is just navigation → wait with "Task is complete, stopping." (use "stop" action)
+- If the task is data extraction → you MUST output the requested data inside the "value" field and use the "answer" action.
 
 Task: {task}
-
-═══════════════════════════════════════════
-LESSONS FROM PAST EXPERIENCE
-═══════════════════════════════════════════
-{few_shot_examples}
 
 ═══════════════════════════════════════════
 CURRENT STATE
@@ -94,26 +69,21 @@ Previous actions:
 {history}
 
 ═══════════════════════════════════════════
-INSTRUCTIONS
+🛑 CRITICAL TERMINATION RULES 🛑
 ═══════════════════════════════════════════
-Look at the screenshot carefully:
-1. Find the element you need to interact with
-2. Use its exact text/label for the selector
-3. For buttons/tabs use: a:has-text('EXACT TEXT ON BUTTON')
-4. For input fields use: input[placeholder='...'] or textarea[name='q']
-5. NEVER put full instruction as value — only the search term
+If the user asks you to extract, find, or summarize data, you MUST write the final extracted data in your response text explicitly BEFORE calling the STOP command.
+Example:
+Data: [Insert extracted links here]
+Action: STOP
+1. If your task instruction says "STOP immediately" or "URL contains:", and the current URL matches that target, YOUR TASK IS 100% COMPLETE.
+2. DO NOT attempt to sign in, accept cookies, click pop-ups, or explore the page unless explicitly asked.
+3. The moment the target page loads or the goal is met, you MUST output:
+   {{"action_type": 6, "action_type_name": "stop", "selector": "", "value": "", "scroll_direction": 1, "reasoning": "Target reached."}}
 
-RULES:
-- ALWAYS click input field before typing
-- value must be ONLY the search term
-- When task is complete → wait with "Task is complete, stopping."
-- If same action fails twice → try different approach
-
-ACTIONS: 0=click 1=type 2=scroll 3=navigate 4=submit 5=back 6=wait
+ACTIONS: 0=click 1=type 2=scroll 3=navigate 4=submit 5=back 6=stop
 
 RESPOND WITH ONLY THIS JSON (no explanation):
-{{"action_type":<0-6>,"action_type_name":"<n>","selector":"<css selector>","value":"<text or url>","scroll_direction":1,"reasoning":"<what you see and why this action>"}}"""
-
+{{"action_type":<0-6>,"action_type_name":"<name>","selector":"<css>","value":"<text>","scroll_direction":1,"reasoning":"<what you see and why>"}}"""
 
 class BrowserAgent:
     def __init__(self):
@@ -217,12 +187,33 @@ class BrowserAgent:
             return f"Memory error: {e}"
 
     # ── Main decision function ─────────────────────────────
+    # ── Main decision function ─────────────────────────────
     def decide_action(self, observation: dict) -> dict:
+        # 🛑 Deterministic Kill Switch: Bypass LLMs entirely if goal is met
+        task_lower = self.task.lower()
+        current_url = observation.get("url", "").lower()
+
+        # Check multi-step task completion
+        if "url contains:" in task_lower:
+            target = task_lower.split("url contains:")[1].strip().strip("'\"")
+            if target and target in current_url:
+                print(f"✅ System Intervention: URL contains '{target}'. Forcing STOP action.")
+                return {"action_type": 6, "action_type_name": "stop", "selector": "", "value": "", "scroll_direction": 1, "reasoning": "System determined target URL was reached."}
+                
+        # Check single-step strict navigation completion
+        if "stop immediately" in task_lower and "you are at" in task_lower:
+            target = task_lower.split("you are at")[1].split(". stop")[0].strip()
+            clean_target = target.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+            if clean_target and clean_target in current_url:
+                print(f"✅ System Intervention: Reached {clean_target}. Forcing STOP action.")
+                return {"action_type": 6, "action_type_name": "stop", "selector": "", "value": "", "scroll_direction": 1, "reasoning": "System determined target URL was reached."}
+
         # Store screenshot as base64
         screenshot = observation.get("screenshot")
         if screenshot is not None:
             self.current_screenshot_b64 = self._screenshot_to_b64(screenshot)
-
+            
+        # ... [rest of your decide_action code remains exactly the same] ...
         action_text = None
 
         # 1. Try Groq with VISION first

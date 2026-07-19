@@ -217,7 +217,8 @@ The final goal is reached when the URL contains: '{success_url}'""",
         query = extract_query(instruction_lower, [
             "search for", "search", "find", "look up", "play", "watch",
             "on youtube", "in youtube", "youtube", "video about", "videos about",
-            "video of", "videos of", "show me"
+            "video of", "videos of", "show me",
+            "open", "go to", "navigate to", "visit"  # <-- ADDED ACTION WORDS
         ])
         if not query:
             return get_task_config("navigate", target_url="https://www.youtube.com")
@@ -235,7 +236,8 @@ The final goal is reached when the URL contains: '{success_url}'""",
         query = extract_query(instruction_lower, [
             "search for", "search", "find", "look up", "go to", "open",
             "on wikipedia", "in wikipedia", "wikipedia", "article about",
-            "article on", "page about", "page on", "the", "a"
+            "article on", "page about", "page on", "the", "a",
+            "open", "navigate to", "visit"  # <-- ADDED ACTION WORDS
         ])
         if not query:
             return get_task_config("navigate", target_url="https://www.wikipedia.org")
@@ -249,12 +251,13 @@ The final goal is reached when the URL contains: '{success_url}'""",
     # ══════════════════════════════════════════════════════
     # PRIORITY 4: Google search
     # ══════════════════════════════════════════════════════
-    elif any(w in instruction_lower for w in ["search for", "search", "google", "look up"]):
+    elif any(w in instruction_lower for w in ["search for", "search", "google", "look up", "open", "go to"]):
         query = extract_query(instruction_lower, [
             "search for", "search google for", "google for", "google",
             "search", "look up", "find", "on google", "in google",
             "please", "can you", "i want to", "i need to", "help me",
-            "show me", "tell me about", "what is", "how to"
+            "show me", "tell me about", "what is", "how to",
+            "open", "go to", "navigate to", "visit"  # <-- ADDED ACTION WORDS
         ])
         if not query:
             return get_task_config("navigate", target_url="https://www.google.com")

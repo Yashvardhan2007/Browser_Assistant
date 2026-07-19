@@ -20,7 +20,13 @@ memory = ReplayBuffer()
 current_env = None
 current_screenshot = None
 is_running = False
+stop_just_clicked = False  # Added flag for the stop toggle
 
+def handle_toggle_click():
+    global is_running, stop_just_clicked
+    if is_running:
+        agent.stop()
+        stop_just_clicked = True
 
 def observation_to_image(observation):
     try:
@@ -31,9 +37,13 @@ def observation_to_image(observation):
         pass
     return None
 
-
 def run_browser_task(message, history):
-    global current_env, current_screenshot, agent, is_running
+    global current_env, current_screenshot, agent, is_running, stop_just_clicked
+
+    if stop_just_clicked:
+        stop_just_clicked = False
+        yield history, current_screenshot, "🛑 Gracefully wrapping up...", gr.update(value="▶ Run", variant="primary", interactive=True)
+        return
 
     if not message.strip():
         yield history, None, "Please enter a task!", gr.update(value="▶ Run", variant="primary", interactive=True)
@@ -103,10 +113,14 @@ def run_browser_task(message, history):
                 
                 final = build_response(message, steps_log, total_reward, True, observation)
                 
-                if action_name.lower() in ["answer", "extract"]:
+                # Check if it's an answer action OR a stop action that contains a value payload
+                has_value = action.get("value", "").strip() != ""
+                if action_name.lower() in ["answer", "extract"] or (action_name.lower() == "stop" and has_value):
                     answer_text = action.get("value", "No answer provided")
-                    history[-1]["content"] = final + f"\n\n💡 **AGENT FOUND THE ANSWER:** {answer_text}"
-                    yield history, current_screenshot, f"💡 Answer: {answer_text}", gr.update(value="▶ Run", variant="primary", interactive=True)
+                    
+                    # Formatting it beautifully for the UI
+                    history[-1]["content"] = final + f"\n\n💡 **EXTRACTED DATA:**\n> {answer_text}"
+                    yield history, current_screenshot, f"💡 Extracted: {answer_text[:40]}...", gr.update(value="▶ Run", variant="primary", interactive=True)
                 else:
                     history[-1]["content"] = final + "\n\n🎉 **Agent voluntarily stopped because the task is complete!**"
                     yield history, current_screenshot, "🎉 Task completed successfully!", gr.update(value="▶ Run", variant="primary", interactive=True)
@@ -185,7 +199,6 @@ def run_browser_task(message, history):
 
     is_running = False
 
-
 def _save_to_memory(task, task_config, steps_log, total_reward, success, observation):
     """Save episode to SQLite database for future learning."""
     try:
@@ -201,7 +214,6 @@ def _save_to_memory(task, task_config, steps_log, total_reward, success, observa
         )
     except Exception as e:
         print(f"Memory save error: {e}")
-
 
 def build_response(task, steps_log, total_reward, success, observation, stopped=False):
     if stopped:
@@ -223,7 +235,6 @@ def build_response(task, steps_log, total_reward, success, observation, stopped=
         }.get(s["action"], "🔧")
         response += f"{emoji} Step {s['step']}: {s['action'].upper()} `{s.get('reward', 0):+.1f}` _{s.get('brain','')}_\n"
     return response
-
 
 def clear_chat():
     global current_env, current_screenshot, is_running
@@ -248,7 +259,6 @@ def clear_chat():
     
     return [], None, "Chat cleared!", gr.update(value="▶ Run", variant="primary", interactive=True)
 
-
 EXAMPLES = [
     "Search for PyTorch on Google",
     "Go to github.com",
@@ -256,7 +266,6 @@ EXAMPLES = [
     "Go to huggingface.co",
     "Search for machine learning on YouTube",
 ]
-
 
 def create_ui():
     # Get stats for header
@@ -300,6 +309,13 @@ def create_ui():
                 </div>
                 """)
 
+        # 1. NEW trigger that bypasses the waiting line to catch mid-run clicks
+        run_btn.click(
+            fn=handle_toggle_click,
+            queue=False 
+        )
+
+        # 2. Existing code running the task queue
         run_btn.click(
             fn=run_browser_task,
             inputs=[msg_input, chatbot],
@@ -316,7 +332,6 @@ def create_ui():
         )
 
     return demo
-
 
 if __name__ == "__main__":
     demo = create_ui()

@@ -169,8 +169,8 @@ class BrowserRLEnv(gym.Env):
         try:
             if not url:
                 return -0.2
-            if not url.startswith("http"):
-                url = "https://" + url
+            if not url.startswith(("http://", "https://")):
+             url = "https://" + url
             self.page.goto(url, timeout=15000)
             time.sleep(2)
             return 0.2
